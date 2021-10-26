@@ -1,0 +1,237 @@
+import stacks
+import std/tables
+import std/strutils
+from strformat import fmt
+import system
+import os
+
+type LitType = enum
+  integer,
+  character,
+  literal,
+  litsubexp
+
+type Elem = ref object
+  case t: LitType
+  of integer: intVal: int
+  of character: charVal: char
+  of literal: litVal: string
+  of litsubexp: subexpVal: string
+
+type Operator = proc(x: var Stack[Elem])
+
+func stringvalue(e: Elem): string =
+  case e.t:
+  of integer: return intToStr(e.intVal)
+  of character: return fmt"$e.charVal"
+  of literal: return e.litVal
+  of litsubexp: return "( " & e.subexpVal & ")"
+
+var replMode = false
+var safe = true
+
+var builtIns = initTable[string, Operator]()
+var variables = initTable[string, Elem]()
+
+proc error(s: string) =
+  echo s
+  if not replMode:
+    system.quit(1)
+  else:
+    safe = false
+
+proc eval(s: string): Stack[Elem] =
+  safe = true
+  var insub = false
+  var stack = Stack[Elem]()
+  var startlen = 0
+  for line in s.splitLines():
+    var lit = false
+    var now = false
+    if not safe:
+      break
+    for word in line.splitWhiteSpace():
+      if not safe:
+        break
+      if builtIns.hasKey(word):
+        if lit:
+          stack.push(Elem(t: literal, litVal: word))
+          lit = false
+        elif insub:
+          if not now:
+            stack.push(Elem(t: literal, litVal: word))
+          else:
+            builtIns[word](stack)
+            now = false
+        else:
+          builtIns[word](stack)
+      elif word == "start":
+        insub = true
+        startlen = stack.len()
+      elif word == "end":
+        insub = false
+        var str = ""
+        for i in 1..stack.len()-startlen:
+          let e = stack.pop()
+          str = e.stringvalue & " " & str
+        stack.push(Elem(t: litsubexp, subexpVal: str))
+      elif word == "now":
+        now = true
+      elif word == "lit":
+        lit = true
+        if insub:
+          stack.push(Elem(t: literal, litVal: word))
+        continue
+      elif word == "comment":
+        break
+      elif variables.hasKey(word):
+        if not insub:
+          if lit:
+            stack.push(Elem(t: literal, litVal: word))
+          else:
+            stack.push(variables[word])
+        else:
+          if not now:
+            stack.push(Elem(t: literal, litVal: word))
+          else:
+            stack.push(variables[word])
+            now = false
+      else:
+        try:
+          let i = word.parseInt()
+          stack.push(Elem(t: integer, intVal: i))
+        except:
+          stack.push(Elem(t: literal, litVal: word))
+
+      if lit:
+        lit = false
+
+  return stack
+
+builtIns["add"] = proc(x: var Stack[Elem]) =
+  let a = x.pop()
+  if a.t != integer:
+    x.push(a)
+    return
+
+  let b = x.pop()
+  if b.t != integer:
+    x.push(b)
+    return
+
+  x.push(Elem(t: integer, intVal: (a.intVal+b.intVal)))
+
+builtIns["sub"] = proc(x: var Stack[Elem]) =
+  let a = x.pop()
+  if a.t != integer:
+    x.push(a)
+    return
+
+  let b = x.pop()
+  if b.t != integer:
+    x.push(b)
+    return
+
+  x.push(Elem(t: integer, intVal: (b.intVal-a.intVal)))
+
+builtIns["inc"] = proc(x: var Stack[Elem]) =
+  let a = x.pop()
+  if a.t != integer:
+    x.push(a)
+    return
+
+  a.intVal += 1
+  x.push(a)
+
+builtIns["dec"] = proc(x: var Stack[Elem]) =
+  let a = x.pop()
+  if a.t != integer:
+    x.push(a)
+    return
+
+  a.intVal -= 1
+  x.push(a)
+
+builtIns["multi"] = proc(x: var Stack[Elem]) =
+  let a = x.pop()
+  if a.t != integer:
+    x.push(a)
+    return
+
+  let b = x.pop()
+  if b.t != integer:
+    x.push(b)
+    return
+
+  x.push(Elem(t: integer, intVal: (b.intVal*a.intVal)))
+
+builtIns["print"] = proc(x: var Stack[Elem]) =
+  let s = x.pop().stringvalue()
+  echo s
+
+builtIns["set"] = proc(x: var Stack[Elem]) =
+  let name = x.pop()
+  if name.t != literal:
+    x.push(name)
+    return
+  let val = x.pop()
+
+  variables[name.litVal] = val
+
+builtIns["eval"] = proc(x: var Stack[Elem]) =
+  let a = x.pop()
+  if a.t != litsubexp:
+    x.push(a)
+    return
+  var y = eval(a.subexpVal)
+  while not y.isEmpty():
+    x.push(y.pop())
+
+builtIns["repeat"] = proc(x: var Stack[Elem]) =
+  let n = x.pop()
+  if n.t != integer:
+    x.push(n)
+    return
+  let sub = x.pop()
+  if sub.t != litsubexp:
+    x.push(sub)
+    return
+
+  for i in 1..n.intVal:
+    discard eval(sub.subexpVal)
+
+builtIns["exit"] = proc(x: var Stack[Elem]) =
+  let code = x.pop()
+  if code.t != integer:
+    x.push(code)
+    return
+  system.quit(code.intVal)
+
+
+proc print(s: var Stack[Elem]) =
+  while not s.isEmpty():
+    stdout.write s.pop().stringvalue()
+    if s.isEmpty():
+      stdout.write "\n"
+      break
+    stdout.write " "
+
+when isMainModule:
+  if paramCount() > 0:
+    let path = paramStr(1)
+    try:
+      let file = readFile(path)
+
+      discard eval(file)
+      system.quit(0)
+    except:
+      echo "There was a problem opening the file"
+      system.quit(1)
+
+  # REPL
+  echo "LIT REPL v0.1"
+  while true:
+    stdout.write "lit> "
+    var line: string = readLine(stdin)
+    var stack = line.eval()
+    stack.print()

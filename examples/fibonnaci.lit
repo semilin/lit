@@ -1,0 +1,10 @@
+1 a set
+1 b set
+1 c set
+
+start
+	a lit c set 
+	a b add lit a set
+	c lit b set
+	a print
+end 90 repeat

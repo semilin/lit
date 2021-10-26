@@ -1,0 +1,8 @@
+1 a set
+1 f set
+
+start
+	a f multi f set       comment set f to a*f
+	a inc lit a set       comment a++
+	f print
+end 20 repeat
